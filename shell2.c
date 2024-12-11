@@ -86,8 +86,8 @@ void execute_with_pipe(char *cmd1[], char *cmd2[]) {
   if (pid2 == 0) {
     // Processo filho 2
     dup2(pipefd[0], STDIN_FILENO); // Redireciona stdin para o pipe
-    close(pipefd[1]);
-    close(pipefd[0]);
+    close(pipefd[1]);   //fecha escrita do pipe
+    close(pipefd[0]);   //fecha leitura do pipe
     if (execvp(cmd2[0], cmd2) == -1) {
       perror("Erro ao executar comando");
       exit(EXIT_FAILURE);
@@ -100,7 +100,7 @@ void execute_with_pipe(char *cmd1[], char *cmd2[]) {
   // Processo pai
   close(pipefd[0]);
   close(pipefd[1]);
-  waitpid(pid1, NULL, 0);
+  waitpid(pid1, NULL, 0); //excelente
   waitpid(pid2, NULL, 0);
 }
 
@@ -160,25 +160,25 @@ int main() {
             if (history_index > 0) {
               history_index--;
               strcpy(current_command, history[history_index]);
-              printf("\r\033[Kshell [%s]> %s", cwd, current_command);
+              printf("\r\033[Kshell [%s]> %s", cwd, current_command); //subistitui a linha pelo comando anterior
               fflush(stdout);
-              pos = strlen(current_command);
-              strcpy(input, current_command);
+              pos = strlen(current_command); //atualioza a posisao do cursor
+              strcpy(input, current_command); //atualiza o bufer de entrada
             }
           } else if (seq[1] == 'B') { // Seta para baixo
             if (history_index < history_count - 1) {
-              history_index++;
-              strcpy(current_command, history[history_index]);
-              printf("\r\033[Kshell [%s]> %s", cwd, current_command);
-              fflush(stdout);
-              pos = strlen(current_command);
-              strcpy(input, current_command);
+              history_index++;                                
+              strcpy(current_command, history[history_index]);    //apenas copia o proximo comando
+              printf("\r\033[Kshell [%s]> %s", cwd, current_command);  //subistitui a linha pelo comando que foi copiado
+              fflush(stdout);                 
+              pos = strlen(current_command);    //atualiza a posicao do cursor 
+              strcpy(input, current_command);   //atualiza o bufer de entrada
             } else if (history_index == history_count - 1) {
               history_index++;
-              printf("\r\033[Kshell [%s]> ", cwd);
+              printf("\r\033[Kshell [%s]> ", cwd);  //limpa a linha atual
               fflush(stdout);
-              pos = 0;
-              memset(input, 0, MAX_LINE);
+              pos = 0;    //reseta a posisao do bufer
+              memset(input, 0, MAX_LINE); //limpa o bufer de entrada
             }
           }
         }
@@ -192,13 +192,13 @@ int main() {
 
     // Adicionar ao histórico
     if (strlen(input) > 0) {
-      add_to_history(input);
+      add_to_history(input); //adiciona o comando ao historico
     }
 
     // Verificar se o comando contém um pipe
     char *pipe_pos = strchr(input, '|');
     if (pipe_pos) {
-      *pipe_pos = '\0';
+      *pipe_pos = '\0'; //divide o comando ao redor do pipe 
       pipe_pos++;
 
       // Dividir os comandos ao redor do pipe
