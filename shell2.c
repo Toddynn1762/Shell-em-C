@@ -21,12 +21,12 @@ int history_index = -1;
 
 // Função para adicionar um comando ao histórico
 void add_to_history(char *command) {
-  if (history_count < HISTORY_SIZE) { //verificar se o historico esta cheio
-    history[history_count++] = strdup(command); //apenas adiciona o comando ao historico em um espaco disponivel 
+  if (history_count < HISTORY_SIZE) {
+    history[history_count++] = strdup(command);
   } else {
     free(history[0]);
     for (int i = 1; i < HISTORY_SIZE; i++) {
-      history[i - 1] = history[i]; //adiciona o comando ao proximo espaco disponivel
+      history[i - 1] = history[i];
     }
     history[HISTORY_SIZE - 1] = strdup(command);
   }
@@ -42,12 +42,12 @@ void show_history() {
 
 // Configura o terminal para entrada não bloqueante (modo não canônico)
 void enable_raw_mode() {
-  struct termios term; //contem estruturas que controlam o comportamento do terminal
-  tcgetattr(STDIN_FILENO, &term); //STDIN_FILENO descritor de arquivo para a entrada do teclado
+  struct termios term;
+  tcgetattr(STDIN_FILENO, &term);
   term.c_lflag &= ~(ICANON | ECHO); // Desativa modo canônico e eco
   term.c_cc[VMIN] = 1;             // Lê um caractere por vez
   term.c_cc[VTIME] = 0;            // Sem timeout
-  tcsetattr(STDIN_FILENO, TCSANOW, &term); //entra em modo canonico novamente
+  tcsetattr(STDIN_FILENO, TCSANOW, &term);
 }
 
 // Restaura o terminal ao modo padrão
@@ -58,139 +58,229 @@ void disable_raw_mode() {
   tcsetattr(STDIN_FILENO, TCSANOW, &term);
 }
 
-// Função para executar comandos com suporte a pipes
-void execute_pipeline(char *commands[], int count) {
+// Função para executar comandos com pipe
+void execute_with_pipe(char *cmd1[], char *cmd2[]) {
   int pipefd[2];
-  int fd_in = 0;
 
-  for (int i = 0; i < count; i++) {
-    pipe(pipefd);
-    pid_t pid = fork();
-
-    if (pid == 0) {
-      // Processo filho
-      dup2(fd_in, 0); // Redireciona entrada padrão
-      if (i < count - 1) {
-        dup2(pipefd[1], 1); // Redireciona saída padrão
-      }
-      close(pipefd[0]);
-      execlp(commands[i], commands[i], NULL);
-      perror("Erro ao executar comando");
-      exit(1);
-    } else if (pid < 0) {
-      perror("Erro ao criar processo");
-      exit(1);
-    }
-
-    // Processo pai
-    close(pipefd[1]);
-    fd_in = pipefd[0]; // A saída do pipe se torna a entrada para o próximo comando
-    waitpid(pid, NULL, 0);
+  if (pipe(pipefd) == -1) {
+    perror("Erro ao criar pipe");
+    return;
   }
+
+  pid_t pid1 = fork();
+  if (pid1 == 0) {
+    // Processo filho 1
+    dup2(pipefd[1], STDOUT_FILENO); // Redireciona stdout para o pipe
+    close(pipefd[0]);
+    close(pipefd[1]);
+    if (execvp(cmd1[0], cmd1) == -1) {
+      perror("Erro ao executar comando");
+      exit(EXIT_FAILURE);
+    }
+  } else if (pid1 < 0) {
+    perror("Erro ao criar processo filho 1");
+    return;
+  }
+
+  pid_t pid2 = fork();
+  if (pid2 == 0) {
+    // Processo filho 2
+    dup2(pipefd[0], STDIN_FILENO); // Redireciona stdin para o pipe
+    close(pipefd[1]);
+    close(pipefd[0]);
+    if (execvp(cmd2[0], cmd2) == -1) {
+      perror("Erro ao executar comando");
+      exit(EXIT_FAILURE);
+    }
+  } else if (pid2 < 0) {
+    perror("Erro ao criar processo filho 2");
+    return;
+  }
+
+  // Processo pai
+  close(pipefd[0]);
+  close(pipefd[1]);
+  waitpid(pid1, NULL, 0);
+  waitpid(pid2, NULL, 0);
 }
 
-
-// Funcao principal
+// Função principal
 int main() {
-  char input[MAX_LINE];                // Buffer para armazenar a entrada do usuario
-  char current_command[MAX_LINE];      // Comando atual processado
-  char *args[MAX_LINE / 2 + 1];        // Vetor para armazenar argumentos do comando
+  char input[MAX_LINE];
+  char current_command[MAX_LINE]; // Para armazenar o comando atual ao navegar no histórico
+  char *args[MAX_LINE / 2 + 1];   // Comando dividido em tokens
+  int background;
 
-  // Obtém o diretório inicial do shell e verifica erros
+  // Salvar o diretório inicial
   if (getcwd(initial_dir, sizeof(initial_dir)) == NULL) {
     perror("Erro ao obter o diretório inicial");
     return 1;
   }
 
-  enable_raw_mode();                   // Configura o terminal para modo não canônico
+  enable_raw_mode();
 
-  while (1) {                          // Loop principal do shell
-    char cwd[1024];                    // Buffer para armazenar o diretório atual
+  while (1) {
+    // Obter o diretório atual
+    char cwd[1024];
     if (getcwd(cwd, sizeof(cwd)) == NULL) {
       perror("Erro ao obter o diretório atual");
     }
 
-    // Exibe o prompt com o diretório atual
+    // Exibir o prompt com o diretório atual
     printf("\nshell [%s]> ", cwd);
-    fflush(stdout);                    // Garante que o prompt seja exibido imediatamente
+    fflush(stdout);
 
-    memset(input, 0, MAX_LINE);        // Limpa o buffer de entrada
-    memset(current_command, 0, MAX_LINE); // Limpa o comando atual
-    int pos = 0;                       // Posição atual para leitura de caracteres
+    // Limpar buffers
+    memset(input, 0, MAX_LINE);
+    memset(current_command, 0, MAX_LINE);
+    int pos = 0;
 
-    // Loop para processar a entrada do usuário
     while (1) {
       char c;
-      read(STDIN_FILENO, &c, 1);       // Lê um caractere do terminal
+      read(STDIN_FILENO, &c, 1);
 
-      if (c == '\n') {                 // Se o caractere e Enter
-        if (pos > 0) {                 // Processa apenas se houver entrada
-          input[pos] = '\0';           // Adiciona o caractere nulo ao final da string
+      if (c == '\n') { // Enter
+        if (pos > 0) {
+          input[pos] = '\0';
           break;
         }
-      } else if (c == 127) {           // Se o caractere e Backspace
-        if (pos > 0) {                 
-          input[--pos] = '\0';      
-          printf("\b \b");             
+      } else if (c == 127) { // Backspace
+        if (pos > 0) {
+          input[--pos] = '\0';
+          printf("\b \b");
           fflush(stdout);
         }
-      } else {                         // Para outros caracteres
-        if (pos < MAX_LINE - 1) {      // Garante que não exceda o tamanho maximo
-          input[pos++] = c;            
-          write(STDOUT_FILENO, &c, 1); 
+      } else if (c == '\033') { // Tecla de escape para setas
+        char seq[2];
+        read(STDIN_FILENO, &seq[0], 1);
+        read(STDIN_FILENO, &seq[1], 1);
+
+        if (seq[0] == '[') {
+          if (seq[1] == 'A') { // Seta para cima
+            if (history_index > 0) {
+              history_index--;
+              strcpy(current_command, history[history_index]);
+              printf("\r\033[Kshell [%s]> %s", cwd, current_command);
+              fflush(stdout);
+              pos = strlen(current_command);
+              strcpy(input, current_command);
+            }
+          } else if (seq[1] == 'B') { // Seta para baixo
+            if (history_index < history_count - 1) {
+              history_index++;
+              strcpy(current_command, history[history_index]);
+              printf("\r\033[Kshell [%s]> %s", cwd, current_command);
+              fflush(stdout);
+              pos = strlen(current_command);
+              strcpy(input, current_command);
+            } else if (history_index == history_count - 1) {
+              history_index++;
+              printf("\r\033[Kshell [%s]> ", cwd);
+              fflush(stdout);
+              pos = 0;
+              memset(input, 0, MAX_LINE);
+            }
+          }
+        }
+      } else { // Qualquer outro caractere
+        if (pos < MAX_LINE - 1) {
+          input[pos++] = c;
+          write(STDOUT_FILENO, &c, 1);
         }
       }
     }
 
-    if (strlen(input) > 0) {           // Se o comando nao estiver vazio
-      add_to_history(input);           // Adiciona ao historico
+    // Adicionar ao histórico
+    if (strlen(input) > 0) {
+      add_to_history(input);
     }
 
-    // Divide o comando em comandos separados por pipes
-    char *commands[MAX_LINE];          // Vetor para armazenar os comandos
-    int command_count = 0;
+    // Verificar se o comando contém um pipe
+    char *pipe_pos = strchr(input, '|');
+    if (pipe_pos) {
+      *pipe_pos = '\0';
+      pipe_pos++;
 
-    char *token = strtok(input, "|");  // Divide a entrada em tokens usando | como delimitador
-    while (token != NULL) {
-      commands[command_count++] = token; // Armazena cada comando separado
-      token = strtok(NULL, "|");         // Avanca para o proximo token
-    }
+      // Dividir os comandos ao redor do pipe
+      char *cmd1[MAX_LINE / 2 + 1];
+      char *cmd2[MAX_LINE / 2 + 1];
 
-    if (command_count > 1) {            // Se há mais de um comando, utiliza pipeline
-      execute_pipeline(commands, command_count); // Executa os comandos em pipeline
+      // Tokenizar o primeiro comando
+      int i = 0;
+      char *token = strtok(input, " ");
+      while (token != NULL) {
+        cmd1[i++] = token;
+        token = strtok(NULL, " ");
+      }
+      cmd1[i] = NULL;
+
+      // Tokenizar o segundo comando
+      i = 0;
+      token = strtok(pipe_pos, " ");
+      while (token != NULL) {
+        cmd2[i++] = token;
+        token = strtok(NULL, " ");
+      }
+      cmd2[i] = NULL;
+
+      execute_with_pipe(cmd1, cmd2);
       continue;
     }
 
-    // Divide o comando em argumentos separados por espaços
+    // Dividir o comando em tokens
     int i = 0;
-    token = strtok(input, " ");
+    char *token = strtok(input, " ");
     while (token != NULL) {
-      args[i++] = token;                // Adiciona cada argumento ao vetor
+      args[i++] = token;
       token = strtok(NULL, " ");
     }
-    args[i] = NULL;                     // Finaliza o vetor com NULL
+    args[i] = NULL;
 
-    if (args[0] != NULL && strcmp(args[0], "exit") == 0) { // Comando interno exit
-      printf("Saindo do shell...\n");   // Mensagem ao usuário
-      break;                            // Sai do loop principal
+    // Verificar se o comando é "exit"
+    if (args[0] != NULL && strcmp(args[0], "exit") == 0) {
+      printf("Saindo do shell...\n");
+      break; // Sai do loop e encerra o programa
     }
 
-    if (args[0] != NULL) {              // Se ha um comando, cria um processo filho
-      pid_t pid = fork();               // Cria um novo processo
-      if (pid < 0) {                    // Verifica falha no fork
-        perror("Erro ao criar processo");
-      } else if (pid == 0) {            // Código do processo filho
-        if (execvp(args[0], args) == -1) { // Executa o comando
-          perror("Erro ao executar comando"); // Exibe erro em caso de falha
+    // Verificar se o comando é "cd"
+    if (args[0] != NULL && strcmp(args[0], "cd") == 0) {
+      if (args[1] == NULL) {
+        // Voltar para o diretório inicial
+        if (chdir(initial_dir) != 0) {
+          perror("Erro ao mudar para o diretório inicial");
         }
-        exit(0);                        // Encerra o processo filho
       } else {
-        waitpid(pid, NULL, 0);          // Processo pai aguarda o filho terminar
+        if (chdir(args[1]) != 0) {
+          perror("Erro ao mudar de diretório");
+        }
+      }
+      continue;
+    }
+
+    // Verificar se o comando é "history"
+    if (args[0] != NULL && strcmp(args[0], "history") == 0) {
+      show_history();
+      continue;
+    }
+
+    // Executar comandos normais
+    if (args[0] != NULL) {
+      pid_t pid = fork();
+      if (pid < 0) {
+        perror("Erro ao criar processo");
+      } else if (pid == 0) {
+        // Processo filho
+        if (execvp(args[0], args) == -1) {
+          perror("Erro ao executar comando");
+        }
+        exit(0);
+      } else {
+        // Processo pai
+        waitpid(pid, NULL, 0);
       }
     }
   }
 
-  disable_raw_mode();                   // Restaura o terminal ao modo padrão
-  return 0;                             // Finaliza o programa
+  disable_raw_mode();
+  return 0;
 }
-
